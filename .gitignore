@@ -1,0 +1,28 @@
+# .NET / Visual Studio
+bin/
+obj/
+.vs/
+
+# Rider
+.idea/
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Logs
+*.log
+
+# Local data (SQLite)
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# OS
+Thumbs.db
+Desktop.ini
+
+

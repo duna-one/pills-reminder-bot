@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "PillsReminderBot": {
+      "commandName": "Project"
+    },
+    "Container (Dockerfile)": {
+      "commandName": "Docker"
+    }
+  }
+}

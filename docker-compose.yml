@@ -1,0 +1,23 @@
+services:
+  pillsreminderbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pillsreminderbot
+    restart: unless-stopped
+    environment:
+      # required
+      BOT_TOKEN: "PASTE_YOUR_TOKEN_HERE"
+
+      # DB (persist to a volume)
+      SQLITE_CONNECTION_STRING: "Data Source=/app/data/pills.db"
+
+      # optional tuning (defaults: 2h poll, 120m repeat)
+      SCHEDULER_POLL_SECONDS: "7200"
+      REPEAT_UNTIL_ACK_MINUTES: "120"
+
+      # Dockerfile uses USER $APP_UID; default in Dockerfile is 0 (root).
+      APP_UID: "0"
+    volumes:
+      - ./data:/app/data
+
