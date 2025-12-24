@@ -1,13 +1,12 @@
 services:
   pillsreminderbot:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: dunaaaaaa/pills-reminder-bot:latest
+    pull_policy: always
     container_name: pillsreminderbot
     restart: unless-stopped
     environment:
       # required
-      BOT_TOKEN: "PASTE_YOUR_TOKEN_HERE"
+      BOT_TOKEN: "${BOT_TOKEN}"
 
       # DB (persist to a volume)
       SQLITE_CONNECTION_STRING: "Data Source=/app/data/pills.db"
