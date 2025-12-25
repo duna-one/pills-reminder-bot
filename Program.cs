@@ -29,7 +29,7 @@ var pgCs =
     ?? "Host=localhost;Port=5432;Database=pills;Username=pills;Password=pills;Pooling=true;Maximum Pool Size=20";
 
 // Validate connection string early to fail fast on invalid format
-var _ = new NpgsqlConnectionStringBuilder(pgCs);
+_ = new NpgsqlConnectionStringBuilder(pgCs);
 
 builder.Services.AddDbContextFactory<AppDbContext>(o => o.UseNpgsql(pgCs));
 
