@@ -84,10 +84,11 @@ public sealed class ReminderSchedulerService : BackgroundService
 
         // We need user chat ids to deliver messages.
         var userIds = due.Select(r => r.TelegramUserId).Distinct().ToArray();
-        var chats = await db.UserProfiles
-            .Where(p => userIds.Contains(p.TelegramUserId))
-            .Select(p => new { p.TelegramUserId, p.ChatId })
-            .ToDictionaryAsync(x => x.TelegramUserId, x => x.ChatId, ct);
+        var chats = (await db.UserProfiles
+                .Where(p => userIds.Contains(p.TelegramUserId))
+                .Select(p => new { p.TelegramUserId, p.ChatId })
+                .ToListAsync(ct))
+            .ToDictionary(x => x.TelegramUserId, x => x.ChatId);
 
         foreach (var r in due)
         {
