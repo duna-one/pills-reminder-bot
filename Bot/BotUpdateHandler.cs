@@ -7,7 +7,6 @@ using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 using System.Collections.Concurrent;
-using Telegram.Bot.Types.Stickers;
 
 namespace PillsReminderBot.Bot;
 
@@ -836,17 +835,6 @@ public sealed class BotUpdateHandler
                     return;
                 }
                 flow.DailyTimeMinutes = dailyMinutes;
-                flow.Stage = ReminderFlowStage.AwaitingTitle;
-                await _bot.SendMessage(chatId, "Введи название/текст напоминания.", replyMarkup: BuildCancelKeyboard(), cancellationToken: ct);
-                return;
-
-            case ReminderFlowStage.AwaitingIntervalStart:
-                if (!TryParseTime(text, out var startMinutes))
-                {
-                    await _bot.SendMessage(chatId, "Неверный формат. Введи время HH:mm, например 09:00.", replyMarkup: BuildCancelKeyboard(), cancellationToken: ct);
-                    return;
-                }
-                flow.DailyTimeMinutes = startMinutes;
                 flow.Stage = ReminderFlowStage.AwaitingTitle;
                 await _bot.SendMessage(chatId, "Введи название/текст напоминания.", replyMarkup: BuildCancelKeyboard(), cancellationToken: ct);
                 return;
