@@ -27,6 +27,9 @@ services:
       # DB (persisted in postgres volume)
       POSTGRES_CONNECTION_STRING: "Host=postgres;Port=5432;Database=pills;Username=pills;Password=pills;Pooling=true;Maximum Pool Size=20"
 
+      # Стикер-сеты котиков для милоты (через запятую, без https://t.me/addstickers/)
+      STICKER_SETS: "tenerezze1,kitties4bynorufx_by_fStikBot"
+
       # optional tuning (defaults: 2h poll, 120m repeat)
       SCHEDULER_POLL_SECONDS: "7200"
       REPEAT_UNTIL_ACK_MINUTES: "120"

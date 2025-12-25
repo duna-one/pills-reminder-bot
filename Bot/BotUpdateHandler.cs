@@ -7,6 +7,7 @@ using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 using System.Collections.Concurrent;
+using Telegram.Bot.Types.Stickers;
 
 namespace PillsReminderBot.Bot;
 
@@ -16,6 +17,8 @@ public sealed class BotUpdateHandler
     private readonly ITelegramBotClient _bot;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private static readonly ConcurrentDictionary<long, ReminderFlowState> _flows = new();
+    private readonly string[] _stickerSets;
+    private readonly ConcurrentDictionary<string, string[]> _stickerCache = new();
 
     public BotUpdateHandler(
         ILogger<BotUpdateHandler> logger,
@@ -25,6 +28,10 @@ public sealed class BotUpdateHandler
         _logger = logger;
         _bot = bot;
         _dbFactory = dbFactory;
+        var envSets = Environment.GetEnvironmentVariable("STICKER_SETS") ?? string.Empty;
+        _stickerSets = envSets
+            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .ToArray();
     }
 
     public async Task HandleUpdateAsync(Update update, CancellationToken ct)
@@ -100,6 +107,7 @@ public sealed class BotUpdateHandler
                     text: "Привет! Я бот-напоминалка.\nМеню внизу поможет управлять напоминаниями.",
                     replyMarkup: BuildMainMenuKeyboard(),
                     cancellationToken: ct);
+                await SendRandomStickerAsync(chatId, ct);
             }
             else
             {
@@ -108,6 +116,7 @@ public sealed class BotUpdateHandler
                     text: "Привет! Я бот-напоминалка.\n\nСначала выбери часовой пояс командой /timezone.",
                     replyMarkup: BuildMainMenuKeyboard(),
                     cancellationToken: ct);
+                await SendRandomStickerAsync(chatId, ct);
             }
             return;
         }
@@ -127,6 +136,7 @@ public sealed class BotUpdateHandler
                 text: "Выбери свой UTC-сдвиг:",
                 replyMarkup: BuildTimeZoneKeyboard(),
                 cancellationToken: ct);
+            await SendRandomStickerAsync(chatId, ct);
             return;
         }
 
@@ -698,6 +708,7 @@ public sealed class BotUpdateHandler
                 "Нажми кнопку ниже, чтобы создать:",
                 replyMarkup: new InlineKeyboardMarkup(InlineKeyboardButton.WithCallbackData("➕ Новое напоминание", "new")),
                 cancellationToken: ct);
+            await SendRandomStickerAsync(chatId, ct);
             return;
         }
 
@@ -736,6 +747,52 @@ public sealed class BotUpdateHandler
     {
         if (string.IsNullOrWhiteSpace(text)) return "—";
         return text.Length <= max ? text : text[..(max - 1)] + "…";
+    }
+
+    private async Task<string?> PickRandomStickerAsync(CancellationToken ct)
+    {
+        if (_stickerSets.Length == 0)
+            return null;
+
+        var setName = _stickerSets[Random.Shared.Next(_stickerSets.Length)];
+        if (!_stickerCache.TryGetValue(setName, out var stickers))
+        {
+            try
+            {
+                var set = await _bot.GetStickerSet(setName, cancellationToken: ct);
+                stickers = set.Stickers
+                    .Where(s => s.Type == StickerType.Regular)
+                    .Select(s => s.FileId)
+                    .ToArray();
+                _stickerCache[setName] = stickers;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to load sticker set {Set}", setName);
+                return null;
+            }
+        }
+
+        if (stickers.Length == 0)
+            return null;
+
+        return stickers[Random.Shared.Next(stickers.Length)];
+    }
+
+    private async Task SendRandomStickerAsync(long chatId, CancellationToken ct)
+    {
+        var fileId = await PickRandomStickerAsync(ct);
+        if (fileId is null)
+            return;
+
+        try
+        {
+            await _bot.SendSticker(chatId, InputFile.FromFileId(fileId), cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to send sticker to chatId={ChatId}", chatId);
+        }
     }
 
     private async Task StartFlowAsync(long userId, long chatId, CancellationToken ct)
@@ -854,6 +911,7 @@ public sealed class BotUpdateHandler
                 $"Создал напоминание #{reminder.Id}: каждый день в {dm / 60:D2}:{dm % 60:D2}.\nСледующий раз: {nextLocalText}",
                 replyMarkup: BuildMainMenuKeyboard(),
                 cancellationToken: ct);
+            await SendRandomStickerAsync(chatId, ct);
             return;
         }
 
