@@ -176,13 +176,13 @@ public sealed class BotUpdateHandler
             var reminder = await db.Reminders.SingleOrDefaultAsync(r => r.Id == id && r.TelegramUserId == userId.Value, ct);
             if (reminder is null)
             {
-                await _bot.SendMessage(chatId, $"Не найдено напоминание #{id}.", cancellationToken: ct);
+                await _bot.SendMessage(chatId, "Не найдено напоминание.", cancellationToken: ct);
                 return;
             }
 
             db.Reminders.Remove(reminder);
             await db.SaveChangesAsync(ct);
-            await _bot.SendMessage(chatId, $"Удалено напоминание #{id}.", cancellationToken: ct);
+            await _bot.SendMessage(chatId, "Удалено напоминание.", cancellationToken: ct);
             return;
         }
 
@@ -206,7 +206,7 @@ public sealed class BotUpdateHandler
             var reminder = await db.Reminders.SingleOrDefaultAsync(r => r.Id == id && r.TelegramUserId == userId.Value, ct);
             if (reminder is null)
             {
-                await _bot.SendMessage(chatId, $"Не найдено напоминание #{id}.", cancellationToken: ct);
+                await _bot.SendMessage(chatId, "Не найдено напоминание.", cancellationToken: ct);
                 return;
             }
 
@@ -214,7 +214,7 @@ public sealed class BotUpdateHandler
             reminder.UpdatedAtUtc = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(ct);
 
-            await _bot.SendMessage(chatId, $"Ок. Напоминание #{id} {(enable ? "включено" : "выключено")}.", cancellationToken: ct);
+            await _bot.SendMessage(chatId, $"Ок. Напоминание {(enable ? "включено" : "выключено")}.", cancellationToken: ct);
             return;
         }
 
@@ -327,7 +327,7 @@ public sealed class BotUpdateHandler
 
             var nextLocalText = await FormatLocalAsync(reminder.NextFireAtUtc, cq.From.Id, ct);
             var schedule = FormatSchedule(reminder);
-            var text = $"#{reminder.Id} {reminder.Title}\n{schedule}\nСтатус: {(reminder.IsEnabled ? "включено" : "выключено")}\nСледующее: {nextLocalText}";
+            var text = $"{reminder.Title}\n{schedule}\nСтатус: {(reminder.IsEnabled ? "включено" : "выключено")}\nСледующее: {nextLocalText}";
 
             if (cq.Message is not null)
             {
@@ -369,7 +369,7 @@ public sealed class BotUpdateHandler
             {
                 await _bot.SendMessage(
                     chatId: cq.Message.Chat.Id,
-                    text: $"Напоминание #{reminder.Id} {(reminder.IsEnabled ? "включено" : "выключено")}.",
+                    text: $"Напоминание {(reminder.IsEnabled ? "включено" : "выключено")}.",
                     replyMarkup: BuildReminderEditKeyboard(reminder),
                     cancellationToken: ct);
             }
@@ -527,7 +527,7 @@ public sealed class BotUpdateHandler
                 new[]
                 {
                     InlineKeyboardButton.WithCallbackData(
-                        $"{(r.IsEnabled ? "✅" : "🚫")} #{r.Id} {Truncate(r.Title, 24)}",
+                        $"{(r.IsEnabled ? "✅" : "🚫")} {Truncate(r.Title, 28)}",
                         $"edit:{r.Id}")
                 })
             .ToList();
@@ -711,7 +711,7 @@ public sealed class BotUpdateHandler
             return;
         }
 
-        var lines = items.Select(i =>
+            var lines = items.Select(i =>
         {
             var schedule = i.Type switch
             {
@@ -719,10 +719,10 @@ public sealed class BotUpdateHandler
                     => $"{dm / 60:D2}:{dm % 60:D2}",
                 _ => "—"
             };
-            var status = i.IsEnabled ? "on" : "off";
-            var ack = i.AwaitingAck ? " (ждёт ✅)" : string.Empty;
-            var nextLocal = i.NextFireAtUtc.ToOffset(offset);
-            return $"#{i.Id} [{status}]{ack} {schedule} — {i.Title} | next: {nextLocal:yyyy-MM-dd HH:mm} ({offset:hh\\:mm})";
+                var status = i.IsEnabled ? "on" : "off";
+                var ack = i.AwaitingAck ? " (ждёт ✅)" : string.Empty;
+                var nextLocal = i.NextFireAtUtc.ToOffset(offset);
+                return $"[{status}]{ack} {schedule} — {i.Title} | next: {nextLocal:yyyy-MM-dd HH:mm} ({offset:hh\\:mm})";
         });
 
         await _bot.SendMessage(
