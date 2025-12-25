@@ -5,7 +5,7 @@ using PillsReminderBot.Bot;
 using PillsReminderBot.Domain;
 using PillsReminderBot.Persistence;
 using Telegram.Bot;
-using Telegram.Bot.Types.InputFiles;
+using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using System.Collections.Concurrent;
 
