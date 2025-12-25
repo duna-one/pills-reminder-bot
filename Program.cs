@@ -57,7 +57,6 @@ await botClient.SetMyCommands(
     new BotCommand { Command = "start", Description = "Приветствие" },
     new BotCommand { Command = "timezone", Description = "Выбор часового пояса" },
     new BotCommand { Command = "new", Description = "Новое напоминание" },
-    new BotCommand { Command = "newi", Description = "Новое в интервале" },
     new BotCommand { Command = "list", Description = "Список напоминаний" },
     new BotCommand { Command = "delete", Description = "Удалить напоминание" },
     new BotCommand { Command = "enable", Description = "Включить напоминание" },
