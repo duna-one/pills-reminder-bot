@@ -6,6 +6,7 @@ using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
+using System.Collections.Concurrent;
 
 namespace PillsReminderBot.Bot;
 
@@ -14,6 +15,7 @@ public sealed class BotUpdateHandler
     private readonly ILogger<BotUpdateHandler> _logger;
     private readonly ITelegramBotClient _bot;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
+    private static readonly ConcurrentDictionary<long, ReminderFlowState> _flows = new();
 
     public BotUpdateHandler(
         ILogger<BotUpdateHandler> logger,
@@ -58,11 +60,20 @@ public sealed class BotUpdateHandler
 
         if (string.Equals(text, "➕ Новое напоминание", StringComparison.OrdinalIgnoreCase))
         {
-            await _bot.SendMessage(
-                chatId,
-                "Создай напоминание командой:\n/new HH:mm Текст\nили в окне:\n/newi HH:mm HH:mm <каждые_минут> Текст\n\nПримеры:\n/new 09:30 Витамин D\n/newi 09:00 21:00 360 Витамины",
-                replyMarkup: BuildMainMenuKeyboard(),
-                cancellationToken: ct);
+            if (userId is null)
+            {
+                await _bot.SendMessage(chatId, "Не удалось определить пользователя Telegram.", cancellationToken: ct);
+                return;
+            }
+
+            await StartFlowAsync(userId.Value, chatId, ct);
+            return;
+        }
+
+        // Если пользователь в мастере создания — обрабатываем шаги
+        if (userId is not null && _flows.TryGetValue(userId.Value, out var flow) && flow.Stage != ReminderFlowStage.None)
+        {
+            await HandleFlowMessageAsync(userId.Value, chatId, text, flow, ct);
             return;
         }
 
@@ -127,57 +138,7 @@ public sealed class BotUpdateHandler
                 return;
             }
 
-            // MVP: /new HH:mm Текст
-            // Example: /new 09:30 Витамин D
-            var parts = text.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (parts.Length < 3)
-            {
-                await _bot.SendMessage(
-                    chatId,
-                    "Формат: /new HH:mm Текст\nПример: /new 09:30 Витамин D",
-                    cancellationToken: ct);
-                return;
-            }
-
-            if (!TryParseTime(parts[1], out var minutes))
-            {
-                await _bot.SendMessage(chatId, "Неверное время. Формат: HH:mm (например 09:30).", cancellationToken: ct);
-                return;
-            }
-
-            await UpsertUserProfileAsync(userId.Value, chatId, ct);
-
-            var now = DateTimeOffset.UtcNow;
-            var nextFireAtUtc = await CalculateNextFireAtUtc(
-                telegramUserId: userId.Value,
-                type: ReminderType.DailyAtTime,
-                dailyMinutes: minutes,
-                windowStartMinutes: null,
-                windowEndMinutes: null,
-                everyMinutes: null,
-                nowUtc: now,
-                ct: ct);
-
-            await using var db = await _dbFactory.CreateDbContextAsync(ct);
-            var reminder = new Reminder
-            {
-                TelegramUserId = userId.Value,
-                Title = parts[2],
-                Message = parts[2],
-                Type = ReminderType.DailyAtTime,
-                DailyTimeMinutes = minutes,
-                NextFireAtUtc = nextFireAtUtc,
-                CreatedAtUtc = now,
-                UpdatedAtUtc = now
-            };
-            db.Reminders.Add(reminder);
-            await db.SaveChangesAsync(ct);
-
-            var nextLocalText = await FormatLocalAsync(nextFireAtUtc, userId.Value, ct);
-            await _bot.SendMessage(
-                chatId: chatId,
-                text: $"Создано напоминание #{reminder.Id}: каждый день в {parts[1]}.\nСледующий раз: {nextLocalText}",
-                cancellationToken: ct);
+            await StartFlowAsync(userId.Value, chatId, ct);
             return;
         }
 
@@ -189,77 +150,7 @@ public sealed class BotUpdateHandler
                 return;
             }
 
-            // MVP: /newi 09:00 21:00 360 Текст
-            // where 360 = every 360 minutes (6h)
-            var parts = text.Split(' ', 5, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (parts.Length < 5)
-            {
-                await _bot.SendMessage(
-                    chatId,
-                    "Формат: /newi HH:mm HH:mm <каждые_минут> Текст\nПример: /newi 09:00 21:00 360 Витамин D",
-                    cancellationToken: ct);
-                return;
-            }
-
-            if (!TryParseTime(parts[1], out var startMinutes) || !TryParseTime(parts[2], out var endMinutes))
-            {
-                await _bot.SendMessage(chatId, "Неверное время. Формат: HH:mm (например 09:00).", cancellationToken: ct);
-                return;
-            }
-
-            if (endMinutes <= startMinutes)
-            {
-                await _bot.SendMessage(chatId, "Конец интервала должен быть больше начала.", cancellationToken: ct);
-                return;
-            }
-
-            if (!int.TryParse(parts[3], out var everyMinutes) || everyMinutes <= 0)
-            {
-                await _bot.SendMessage(chatId, "Неверный интервал. Укажи число минут > 0 (например 360).", cancellationToken: ct);
-                return;
-            }
-
-            if (everyMinutes < 30)
-            {
-                await _bot.SendMessage(chatId, "Слишком часто. Минимум: 30 минут.", cancellationToken: ct);
-                return;
-            }
-
-            await UpsertUserProfileAsync(userId.Value, chatId, ct);
-
-            var now = DateTimeOffset.UtcNow;
-            var nextFireAtUtc = await CalculateNextFireAtUtc(
-                telegramUserId: userId.Value,
-                type: ReminderType.EveryNMinutesInWindow,
-                dailyMinutes: null,
-                windowStartMinutes: startMinutes,
-                windowEndMinutes: endMinutes,
-                everyMinutes: everyMinutes,
-                nowUtc: now,
-                ct: ct);
-
-            await using var db = await _dbFactory.CreateDbContextAsync(ct);
-            var reminder = new Reminder
-            {
-                TelegramUserId = userId.Value,
-                Title = parts[4],
-                Message = parts[4],
-                Type = ReminderType.EveryNMinutesInWindow,
-                WindowStartMinutes = startMinutes,
-                WindowEndMinutes = endMinutes,
-                EveryMinutes = everyMinutes,
-                NextFireAtUtc = nextFireAtUtc,
-                CreatedAtUtc = now,
-                UpdatedAtUtc = now
-            };
-            db.Reminders.Add(reminder);
-            await db.SaveChangesAsync(ct);
-
-            var nextLocalText = await FormatLocalAsync(nextFireAtUtc, userId.Value, ct);
-            await _bot.SendMessage(
-                chatId: chatId,
-                text: $"Создано напоминание #{reminder.Id}: {parts[1]}–{parts[2]} каждые {everyMinutes} мин.\nСледующий раз: {nextLocalText}",
-                cancellationToken: ct);
+            await StartFlowAsync(userId.Value, chatId, ct);
             return;
         }
 
@@ -384,11 +275,59 @@ public sealed class BotUpdateHandler
 
         if (cq.Data.Equals("new", StringComparison.Ordinal))
         {
+            if (cq.From is not null && cq.Message is not null)
+            {
+                await StartFlowAsync(cq.From.Id, cq.Message.Chat.Id, ct);
+            }
+            await _bot.AnswerCallbackQuery(cq.Id, cancellationToken: ct);
+            return;
+        }
+
+        if (cq.Data.Equals("new_daily", StringComparison.Ordinal))
+        {
+            if (cq.From is not null && cq.Message is not null)
+            {
+                var flow = GetOrCreateFlow(cq.From.Id);
+                flow.Stage = ReminderFlowStage.AwaitingDailyTime;
+                flow.TargetType = ReminderType.DailyAtTime;
+                await _bot.SendMessage(
+                    cq.Message.Chat.Id,
+                    "Укажи время в формате HH:mm (например, 09:30).",
+                    replyMarkup: BuildCancelKeyboard(),
+                    cancellationToken: ct);
+            }
+            await _bot.AnswerCallbackQuery(cq.Id, cancellationToken: ct);
+            return;
+        }
+
+        if (cq.Data.Equals("new_interval", StringComparison.Ordinal))
+        {
+            if (cq.From is not null && cq.Message is not null)
+            {
+                var flow = GetOrCreateFlow(cq.From.Id);
+                flow.Stage = ReminderFlowStage.AwaitingIntervalStart;
+                flow.TargetType = ReminderType.EveryNMinutesInWindow;
+                await _bot.SendMessage(
+                    cq.Message.Chat.Id,
+                    "Укажи начало окна в формате HH:mm (например, 09:00).",
+                    replyMarkup: BuildCancelKeyboard(),
+                    cancellationToken: ct);
+            }
+            await _bot.AnswerCallbackQuery(cq.Id, cancellationToken: ct);
+            return;
+        }
+
+        if (cq.Data.Equals("cancel_flow", StringComparison.Ordinal))
+        {
+            if (cq.From is not null)
+            {
+                _flows.TryRemove(cq.From.Id, out _);
+            }
             if (cq.Message is not null)
             {
                 await _bot.SendMessage(
-                    chatId: cq.Message.Chat.Id,
-                    text: "Создай напоминание:\n/new HH:mm Текст\nили:\n/newi HH:mm HH:mm <каждые_минут> Текст",
+                    cq.Message.Chat.Id,
+                    "Создание напоминания отменено.",
                     replyMarkup: BuildMainMenuKeyboard(),
                     cancellationToken: ct);
             }
@@ -614,6 +553,26 @@ public sealed class BotUpdateHandler
         {
             ResizeKeyboard = true
         };
+
+    private static InlineKeyboardMarkup BuildFlowTypeKeyboard()
+        => new InlineKeyboardMarkup(new[]
+        {
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Каждый день в одно время", "new_daily")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("В интервале (каждые N минут)", "new_interval")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("❌ Отмена", "cancel_flow")
+            }
+        });
+
+    private static InlineKeyboardMarkup BuildCancelKeyboard()
+        => new InlineKeyboardMarkup(InlineKeyboardButton.WithCallbackData("❌ Отмена", "cancel_flow"));
 
     private static InlineKeyboardMarkup BuildReminderListKeyboard(IEnumerable<Reminder> reminders)
     {
@@ -846,6 +805,196 @@ public sealed class BotUpdateHandler
         return text.Length <= max ? text : text[..(max - 1)] + "…";
     }
 
+    private async Task StartFlowAsync(long userId, long chatId, CancellationToken ct)
+    {
+        // Требуем заданную таймзону для корректных расчётов
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var tz = await db.UserProfiles
+            .Where(p => p.TelegramUserId == userId)
+            .Select(p => p.TimeZoneId)
+            .SingleOrDefaultAsync(ct);
+
+        if (string.IsNullOrWhiteSpace(tz))
+        {
+            await _bot.SendMessage(
+                chatId,
+                "Сначала задай часовой пояс командой /timezone.",
+                replyMarkup: BuildMainMenuKeyboard(),
+                cancellationToken: ct);
+            return;
+        }
+
+        var flow = GetOrCreateFlow(userId);
+        flow.Reset();
+        flow.Stage = ReminderFlowStage.AwaitingType;
+
+        await _bot.SendMessage(
+            chatId,
+            "Какое напоминание создать?",
+            replyMarkup: BuildFlowTypeKeyboard(),
+            cancellationToken: ct);
+    }
+
+    private async Task HandleFlowMessageAsync(long userId, long chatId, string text, ReminderFlowState flow, CancellationToken ct)
+    {
+        switch (flow.Stage)
+        {
+            case ReminderFlowStage.AwaitingDailyTime:
+                if (!TryParseTime(text, out var dailyMinutes))
+                {
+                    await _bot.SendMessage(chatId, "Неверный формат. Введи время HH:mm, например 09:30.", replyMarkup: BuildCancelKeyboard(), cancellationToken: ct);
+                    return;
+                }
+                flow.DailyTimeMinutes = dailyMinutes;
+                flow.Stage = ReminderFlowStage.AwaitingTitle;
+                await _bot.SendMessage(chatId, "Введи название/текст напоминания.", replyMarkup: BuildCancelKeyboard(), cancellationToken: ct);
+                return;
+
+            case ReminderFlowStage.AwaitingIntervalStart:
+                if (!TryParseTime(text, out var startMinutes))
+                {
+                    await _bot.SendMessage(chatId, "Неверный формат. Введи время HH:mm, например 09:00.", replyMarkup: BuildCancelKeyboard(), cancellationToken: ct);
+                    return;
+                }
+                flow.WindowStartMinutes = startMinutes;
+                flow.Stage = ReminderFlowStage.AwaitingIntervalEnd;
+                await _bot.SendMessage(chatId, "Теперь конец окна HH:mm (должен быть позже начала).", replyMarkup: BuildCancelKeyboard(), cancellationToken: ct);
+                return;
+
+            case ReminderFlowStage.AwaitingIntervalEnd:
+                if (!TryParseTime(text, out var endMinutes))
+                {
+                    await _bot.SendMessage(chatId, "Неверный формат. Введи время HH:mm, например 21:00.", replyMarkup: BuildCancelKeyboard(), cancellationToken: ct);
+                    return;
+                }
+                if (flow.WindowStartMinutes is null || endMinutes <= flow.WindowStartMinutes)
+                {
+                    await _bot.SendMessage(chatId, "Конец должен быть позже начала. Попробуй снова.", replyMarkup: BuildCancelKeyboard(), cancellationToken: ct);
+                    return;
+                }
+                flow.WindowEndMinutes = endMinutes;
+                flow.Stage = ReminderFlowStage.AwaitingIntervalEvery;
+                await _bot.SendMessage(chatId, "Как часто напоминать? Укажи интервал в минутах (минимум 30).", replyMarkup: BuildCancelKeyboard(), cancellationToken: ct);
+                return;
+
+            case ReminderFlowStage.AwaitingIntervalEvery:
+                if (!int.TryParse(text, out var everyMinutes) || everyMinutes < 30)
+                {
+                    await _bot.SendMessage(chatId, "Неверно. Укажи число минут (минимум 30).", replyMarkup: BuildCancelKeyboard(), cancellationToken: ct);
+                    return;
+                }
+                flow.EveryMinutes = everyMinutes;
+                flow.Stage = ReminderFlowStage.AwaitingTitle;
+                await _bot.SendMessage(chatId, "Введи название/текст напоминания.", replyMarkup: BuildCancelKeyboard(), cancellationToken: ct);
+                return;
+
+            case ReminderFlowStage.AwaitingTitle:
+                var title = text.Trim();
+                if (string.IsNullOrWhiteSpace(title))
+                {
+                    await _bot.SendMessage(chatId, "Текст пустой. Введи название напоминания.", replyMarkup: BuildCancelKeyboard(), cancellationToken: ct);
+                    return;
+                }
+                flow.Title = title;
+                await CreateReminderFromFlowAsync(userId, chatId, flow, ct);
+                _flows.TryRemove(userId, out _);
+                return;
+        }
+
+        // Любой другой случай — сброс мастера
+        _flows.TryRemove(userId, out _);
+        await _bot.SendMessage(chatId, "Диалог сброшен. Нажми «➕ Новое напоминание», чтобы начать заново.", replyMarkup: BuildMainMenuKeyboard(), cancellationToken: ct);
+    }
+
+    private ReminderFlowState GetOrCreateFlow(long userId)
+        => _flows.GetOrAdd(userId, _ => new ReminderFlowState());
+
+    private async Task CreateReminderFromFlowAsync(long userId, long chatId, ReminderFlowState flow, CancellationToken ct)
+    {
+        await UpsertUserProfileAsync(userId, chatId, ct);
+
+        var now = DateTimeOffset.UtcNow;
+
+        if (flow.TargetType == ReminderType.DailyAtTime && flow.DailyTimeMinutes is int dm)
+        {
+            var nextFireAtUtc = await CalculateNextFireAtUtc(
+                telegramUserId: userId,
+                type: ReminderType.DailyAtTime,
+                dailyMinutes: dm,
+                windowStartMinutes: null,
+                windowEndMinutes: null,
+                everyMinutes: null,
+                nowUtc: now,
+                ct: ct);
+
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var reminder = new Reminder
+            {
+                TelegramUserId = userId,
+                Title = flow.Title ?? string.Empty,
+                Message = flow.Title ?? string.Empty,
+                Type = ReminderType.DailyAtTime,
+                DailyTimeMinutes = dm,
+                NextFireAtUtc = nextFireAtUtc,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now
+            };
+            db.Reminders.Add(reminder);
+            await db.SaveChangesAsync(ct);
+
+            var nextLocalText = await FormatLocalAsync(nextFireAtUtc, userId, ct);
+            await _bot.SendMessage(
+                chatId,
+                $"Создал напоминание #{reminder.Id}: каждый день в {dm / 60:D2}:{dm % 60:D2}.\nСледующий раз: {nextLocalText}",
+                replyMarkup: BuildMainMenuKeyboard(),
+                cancellationToken: ct);
+            return;
+        }
+
+        if (flow.TargetType == ReminderType.EveryNMinutesInWindow
+            && flow.WindowStartMinutes is int ws
+            && flow.WindowEndMinutes is int we
+            && flow.EveryMinutes is int ev)
+        {
+            var nextFireAtUtc = await CalculateNextFireAtUtc(
+                telegramUserId: userId,
+                type: ReminderType.EveryNMinutesInWindow,
+                dailyMinutes: null,
+                windowStartMinutes: ws,
+                windowEndMinutes: we,
+                everyMinutes: ev,
+                nowUtc: now,
+                ct: ct);
+
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var reminder = new Reminder
+            {
+                TelegramUserId = userId,
+                Title = flow.Title ?? string.Empty,
+                Message = flow.Title ?? string.Empty,
+                Type = ReminderType.EveryNMinutesInWindow,
+                WindowStartMinutes = ws,
+                WindowEndMinutes = we,
+                EveryMinutes = ev,
+                NextFireAtUtc = nextFireAtUtc,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now
+            };
+            db.Reminders.Add(reminder);
+            await db.SaveChangesAsync(ct);
+
+            var nextLocalText = await FormatLocalAsync(nextFireAtUtc, userId, ct);
+            await _bot.SendMessage(
+                chatId,
+                $"Создал напоминание #{reminder.Id}: {ws / 60:D2}:{ws % 60:D2}–{we / 60:D2}:{we % 60:D2} каждые {ev} мин.\nСледующий раз: {nextLocalText}",
+                replyMarkup: BuildMainMenuKeyboard(),
+                cancellationToken: ct);
+            return;
+        }
+
+        await _bot.SendMessage(chatId, "Не удалось создать напоминание. Попробуй ещё раз.", replyMarkup: BuildMainMenuKeyboard(), cancellationToken: ct);
+    }
+
     private async Task UpsertUserProfileAsync(long telegramUserId, long chatId, CancellationToken ct)
     {
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
@@ -870,6 +1019,39 @@ public sealed class BotUpdateHandler
         }
 
         await db.SaveChangesAsync(ct);
+    }
+
+    private sealed class ReminderFlowState
+    {
+        public ReminderFlowStage Stage { get; set; } = ReminderFlowStage.None;
+        public ReminderType? TargetType { get; set; }
+        public int? DailyTimeMinutes { get; set; }
+        public int? WindowStartMinutes { get; set; }
+        public int? WindowEndMinutes { get; set; }
+        public int? EveryMinutes { get; set; }
+        public string? Title { get; set; }
+
+        public void Reset()
+        {
+            Stage = ReminderFlowStage.None;
+            TargetType = null;
+            DailyTimeMinutes = null;
+            WindowStartMinutes = null;
+            WindowEndMinutes = null;
+            EveryMinutes = null;
+            Title = null;
+        }
+    }
+
+    private enum ReminderFlowStage
+    {
+        None = 0,
+        AwaitingType,
+        AwaitingDailyTime,
+        AwaitingIntervalStart,
+        AwaitingIntervalEnd,
+        AwaitingIntervalEvery,
+        AwaitingTitle
     }
 }
 
