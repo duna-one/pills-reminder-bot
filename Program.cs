@@ -6,6 +6,8 @@ using PillsReminderBot.Persistence;
 using PillsReminderBot.Scheduler;
 using Telegram.Bot;
 using Microsoft.EntityFrameworkCore;
+using Telegram.Bot.Types;
+using Telegram.Bot.Types.Enums;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -41,7 +43,23 @@ await using (var db = host.Services.GetRequiredService<IDbContextFactory<AppDbCo
 }
 
 var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
-var me = await host.Services.GetRequiredService<ITelegramBotClient>().GetMe();
+var botClient = host.Services.GetRequiredService<ITelegramBotClient>();
+var me = await botClient.GetMe();
 logger.LogInformation("Bot started as @{Username} (id={Id})", me.Username, me.Id);
+
+// Настроим команды бота, чтобы меню Telegram показывало основные действия
+await botClient.SetMyCommands(
+[
+    new BotCommand { Command = "start", Description = "Приветствие" },
+    new BotCommand { Command = "timezone", Description = "Выбор часового пояса" },
+    new BotCommand { Command = "new", Description = "Новое напоминание" },
+    new BotCommand { Command = "newi", Description = "Новое в интервале" },
+    new BotCommand { Command = "list", Description = "Список напоминаний" },
+    new BotCommand { Command = "delete", Description = "Удалить напоминание" },
+    new BotCommand { Command = "enable", Description = "Включить напоминание" },
+    new BotCommand { Command = "disable", Description = "Выключить напоминание" }
+],
+    new BotCommandScopeDefault(),
+    cancellationToken: CancellationToken.None);
 
 await host.RunAsync();

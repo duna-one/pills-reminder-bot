@@ -49,6 +49,23 @@ public sealed class BotUpdateHandler
 
         _logger.LogInformation("Message from chatId={ChatId}: {Text}", chatId, text);
 
+        // Поддержка главного меню (reply keyboard) — эквиваленты команд
+        if (string.Equals(text, "📋 Список напоминаний", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleListAsync(userId, chatId, ct);
+            return;
+        }
+
+        if (string.Equals(text, "➕ Новое напоминание", StringComparison.OrdinalIgnoreCase))
+        {
+            await _bot.SendMessage(
+                chatId,
+                "Создай напоминание командой:\n/new HH:mm Текст\nили в окне:\n/newi HH:mm HH:mm <каждые_минут> Текст\n\nПримеры:\n/new 09:30 Витамин D\n/newi 09:00 21:00 360 Витамины",
+                replyMarkup: BuildMainMenuKeyboard(),
+                cancellationToken: ct);
+            return;
+        }
+
         if (text.StartsWith("/start", StringComparison.OrdinalIgnoreCase))
         {
             if (userId is null)
@@ -59,10 +76,28 @@ public sealed class BotUpdateHandler
 
             await UpsertUserProfileAsync(userId.Value, chatId, ct);
 
-            await _bot.SendMessage(
-                chatId: chatId,
-                text: "Привет! Я бот-напоминалка.\n\nСначала выбери часовой пояс командой /timezone.",
-                cancellationToken: ct);
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var hasTimezone = await db.UserProfiles
+                .Where(p => p.TelegramUserId == userId.Value)
+                .Select(p => !string.IsNullOrWhiteSpace(p.TimeZoneId))
+                .SingleAsync(ct);
+
+            if (hasTimezone)
+            {
+                await _bot.SendMessage(
+                    chatId: chatId,
+                    text: "Привет! Я бот-напоминалка.\nМеню внизу поможет управлять напоминаниями.",
+                    replyMarkup: BuildMainMenuKeyboard(),
+                    cancellationToken: ct);
+            }
+            else
+            {
+                await _bot.SendMessage(
+                    chatId: chatId,
+                    text: "Привет! Я бот-напоминалка.\n\nСначала выбери часовой пояс командой /timezone.",
+                    replyMarkup: BuildMainMenuKeyboard(),
+                    cancellationToken: ct);
+            }
             return;
         }
 
@@ -230,60 +265,7 @@ public sealed class BotUpdateHandler
 
         if (text.StartsWith("/list", StringComparison.OrdinalIgnoreCase))
         {
-            if (userId is null)
-            {
-                await _bot.SendMessage(chatId, "Не удалось определить пользователя Telegram.", cancellationToken: ct);
-                return;
-            }
-
-            await using var db = await _dbFactory.CreateDbContextAsync(ct);
-            var tzId = await db.UserProfiles
-                .Where(p => p.TelegramUserId == userId.Value)
-                .Select(p => p.TimeZoneId)
-                .SingleOrDefaultAsync(ct);
-            var offset = ParseUtcOffsetOrZero(tzId);
-
-            var items = await db.Reminders
-                .Where(r => r.TelegramUserId == userId.Value)
-                .OrderBy(r => r.Id)
-                .Select(r => new
-                {
-                    r.Id,
-                    r.Title,
-                    r.IsEnabled,
-                    r.AwaitingAck,
-                    r.NextFireAtUtc,
-                    r.Type,
-                    r.DailyTimeMinutes,
-                    r.WindowStartMinutes,
-                    r.WindowEndMinutes,
-                    r.EveryMinutes
-                })
-                .ToListAsync(ct);
-
-            if (items.Count == 0)
-            {
-                await _bot.SendMessage(chatId, "Напоминаний пока нет. Создай: /new HH:mm Текст", cancellationToken: ct);
-                return;
-            }
-
-            var lines = items.Select(i =>
-            {
-                var schedule = i.Type switch
-                {
-                    ReminderType.DailyAtTime when i.DailyTimeMinutes is int dm
-                        => $"{dm / 60:D2}:{dm % 60:D2}",
-                    ReminderType.EveryNMinutesInWindow when i.WindowStartMinutes is int ws && i.WindowEndMinutes is int we && i.EveryMinutes is int ev
-                        => $"{ws / 60:D2}:{ws % 60:D2}–{we / 60:D2}:{we % 60:D2} / {ev}m",
-                    _ => "—"
-                };
-                var status = i.IsEnabled ? "on" : "off";
-                var ack = i.AwaitingAck ? " (ждёт ✅)" : string.Empty;
-                var nextLocal = i.NextFireAtUtc.ToOffset(offset);
-                return $"#{i.Id} [{status}]{ack} {schedule} — {i.Title} | next: {nextLocal:yyyy-MM-dd HH:mm} ({offset:hh\\:mm})";
-            });
-
-            await _bot.SendMessage(chatId, string.Join("\n", lines), cancellationToken: ct);
+            await HandleListAsync(userId, chatId, ct);
             return;
         }
 
@@ -393,6 +375,134 @@ public sealed class BotUpdateHandler
                 await _bot.SendMessage(
                     chatId: cq.Message.Chat.Id,
                     text: $"Ок! Сохранил часовой пояс: {tz}",
+                    replyMarkup: BuildMainMenuKeyboard(),
+                    cancellationToken: ct);
+            }
+
+            return;
+        }
+
+        if (cq.Data.Equals("new", StringComparison.Ordinal))
+        {
+            if (cq.Message is not null)
+            {
+                await _bot.SendMessage(
+                    chatId: cq.Message.Chat.Id,
+                    text: "Создай напоминание:\n/new HH:mm Текст\nили:\n/newi HH:mm HH:mm <каждые_минут> Текст",
+                    replyMarkup: BuildMainMenuKeyboard(),
+                    cancellationToken: ct);
+            }
+            await _bot.AnswerCallbackQuery(cq.Id, cancellationToken: ct);
+            return;
+        }
+
+        if (cq.Data.Equals("list", StringComparison.Ordinal))
+        {
+            if (cq.Message is not null)
+            {
+                await HandleListAsync(cq.From.Id, cq.Message.Chat.Id, ct);
+            }
+            await _bot.AnswerCallbackQuery(cq.Id, cancellationToken: ct);
+            return;
+        }
+
+        if (cq.Data.StartsWith("edit:", StringComparison.Ordinal))
+        {
+            var payload = cq.Data["edit:".Length..];
+            if (!long.TryParse(payload, out var reminderId))
+                return;
+
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var reminder = await db.Reminders.SingleOrDefaultAsync(
+                r => r.Id == reminderId && r.TelegramUserId == cq.From.Id,
+                ct);
+
+            if (reminder is null)
+            {
+                await _bot.AnswerCallbackQuery(cq.Id, text: "Не найдено напоминание.", cancellationToken: ct);
+                return;
+            }
+
+            var nextLocalText = await FormatLocalAsync(reminder.NextFireAtUtc, cq.From.Id, ct);
+            var schedule = FormatSchedule(reminder);
+            var text = $"#{reminder.Id} {reminder.Title}\n{schedule}\nСтатус: {(reminder.IsEnabled ? "включено" : "выключено")}\nСледующее: {nextLocalText}";
+
+            if (cq.Message is not null)
+            {
+                await _bot.SendMessage(
+                    chatId: cq.Message.Chat.Id,
+                    text: text,
+                    replyMarkup: BuildReminderEditKeyboard(reminder),
+                    cancellationToken: ct);
+            }
+
+            await _bot.AnswerCallbackQuery(cq.Id, cancellationToken: ct);
+            return;
+        }
+
+        if (cq.Data.StartsWith("toggle:", StringComparison.Ordinal))
+        {
+            var payload = cq.Data["toggle:".Length..];
+            if (!long.TryParse(payload, out var reminderId))
+                return;
+
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var reminder = await db.Reminders.SingleOrDefaultAsync(
+                r => r.Id == reminderId && r.TelegramUserId == cq.From.Id,
+                ct);
+
+            if (reminder is null)
+            {
+                await _bot.AnswerCallbackQuery(cq.Id, text: "Не найдено напоминание.", cancellationToken: ct);
+                return;
+            }
+
+            reminder.IsEnabled = !reminder.IsEnabled;
+            reminder.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync(ct);
+
+            await _bot.AnswerCallbackQuery(cq.Id, text: reminder.IsEnabled ? "Включено" : "Выключено", cancellationToken: ct);
+
+            if (cq.Message is not null)
+            {
+                await _bot.SendMessage(
+                    chatId: cq.Message.Chat.Id,
+                    text: $"Напоминание #{reminder.Id} {(reminder.IsEnabled ? "включено" : "выключено")}.",
+                    replyMarkup: BuildReminderEditKeyboard(reminder),
+                    cancellationToken: ct);
+            }
+
+            return;
+        }
+
+        if (cq.Data.StartsWith("del:", StringComparison.Ordinal))
+        {
+            var payload = cq.Data["del:".Length..];
+            if (!long.TryParse(payload, out var reminderId))
+                return;
+
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var reminder = await db.Reminders.SingleOrDefaultAsync(
+                r => r.Id == reminderId && r.TelegramUserId == cq.From.Id,
+                ct);
+
+            if (reminder is null)
+            {
+                await _bot.AnswerCallbackQuery(cq.Id, text: "Не найдено напоминание.", cancellationToken: ct);
+                return;
+            }
+
+            db.Reminders.Remove(reminder);
+            await db.SaveChangesAsync(ct);
+
+            await _bot.AnswerCallbackQuery(cq.Id, text: "Удалено.", cancellationToken: ct);
+
+            if (cq.Message is not null)
+            {
+                await _bot.SendMessage(
+                    chatId: cq.Message.Chat.Id,
+                    text: $"Удалено напоминание #{reminder.Id}.",
+                    replyMarkup: BuildMainMenuKeyboard(),
                     cancellationToken: ct);
             }
 
@@ -494,6 +604,53 @@ public sealed class BotUpdateHandler
     public static InlineKeyboardMarkup BuildAckKeyboard(long reminderId, string cycleId)
         => new InlineKeyboardMarkup(
             InlineKeyboardButton.WithCallbackData("✅ Выпил", $"ack:{reminderId}:{cycleId}"));
+
+    private static ReplyKeyboardMarkup BuildMainMenuKeyboard()
+        => new ReplyKeyboardMarkup(new[]
+        {
+            new KeyboardButton[] { "📋 Список напоминаний" },
+            new KeyboardButton[] { "➕ Новое напоминание" }
+        })
+        {
+            ResizeKeyboard = true
+        };
+
+    private static InlineKeyboardMarkup BuildReminderListKeyboard(IEnumerable<Reminder> reminders)
+    {
+        var rows = reminders
+            .Select(r =>
+                new[]
+                {
+                    InlineKeyboardButton.WithCallbackData(
+                        $"{(r.IsEnabled ? "✅" : "🚫")} #{r.Id} {Truncate(r.Title, 24)}",
+                        $"edit:{r.Id}")
+                })
+            .ToList();
+
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("➕ Новое напоминание", "new") });
+
+        return new InlineKeyboardMarkup(rows);
+    }
+
+    private static InlineKeyboardMarkup BuildReminderEditKeyboard(Reminder reminder)
+        => new InlineKeyboardMarkup(new[]
+        {
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData(
+                    reminder.IsEnabled ? "Выключить" : "Включить",
+                    $"toggle:{reminder.Id}")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("🗑 Удалить", $"del:{reminder.Id}")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("↩️ К списку", "list"),
+                InlineKeyboardButton.WithCallbackData("➕ Новое", "new")
+            }
+        });
 
     private static bool TryParseTime(string hhmm, out int minutesFromMidnight)
     {
@@ -611,6 +768,82 @@ public sealed class BotUpdateHandler
         var offset = ParseUtcOffsetOrZero(tzId);
         var local = utc.ToOffset(offset);
         return $"{local:yyyy-MM-dd HH:mm} (UTC{(offset < TimeSpan.Zero ? "-" : "+")}{offset.Duration():hh\\:mm})";
+    }
+
+    private async Task HandleListAsync(long? userId, long chatId, CancellationToken ct)
+    {
+        if (userId is null)
+        {
+            await _bot.SendMessage(chatId, "Не удалось определить пользователя Telegram.", cancellationToken: ct);
+            return;
+        }
+
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var tzId = await db.UserProfiles
+            .Where(p => p.TelegramUserId == userId.Value)
+            .Select(p => p.TimeZoneId)
+            .SingleOrDefaultAsync(ct);
+        var offset = ParseUtcOffsetOrZero(tzId);
+
+        var items = await db.Reminders
+            .Where(r => r.TelegramUserId == userId.Value)
+            .OrderBy(r => r.Id)
+            .ToListAsync(ct);
+
+        if (items.Count == 0)
+        {
+            await _bot.SendMessage(
+                chatId,
+                "Напоминаний пока нет. Создай новое.",
+                replyMarkup: BuildMainMenuKeyboard(),
+                cancellationToken: ct);
+            await _bot.SendMessage(
+                chatId,
+                "Нажми кнопку ниже, чтобы создать:",
+                replyMarkup: new InlineKeyboardMarkup(InlineKeyboardButton.WithCallbackData("➕ Новое напоминание", "new")),
+                cancellationToken: ct);
+            return;
+        }
+
+        var lines = items.Select(i =>
+        {
+            var schedule = i.Type switch
+            {
+                ReminderType.DailyAtTime when i.DailyTimeMinutes is int dm
+                    => $"{dm / 60:D2}:{dm % 60:D2}",
+                ReminderType.EveryNMinutesInWindow when i.WindowStartMinutes is int ws && i.WindowEndMinutes is int we && i.EveryMinutes is int ev
+                    => $"{ws / 60:D2}:{ws % 60:D2}–{we / 60:D2}:{we % 60:D2} / {ev}m",
+                _ => "—"
+            };
+            var status = i.IsEnabled ? "on" : "off";
+            var ack = i.AwaitingAck ? " (ждёт ✅)" : string.Empty;
+            var nextLocal = i.NextFireAtUtc.ToOffset(offset);
+            return $"#{i.Id} [{status}]{ack} {schedule} — {i.Title} | next: {nextLocal:yyyy-MM-dd HH:mm} ({offset:hh\\:mm})";
+        });
+
+        await _bot.SendMessage(
+            chatId,
+            string.Join("\n", lines),
+            replyMarkup: BuildReminderListKeyboard(items),
+            cancellationToken: ct);
+    }
+
+    private static string FormatSchedule(Reminder r)
+    {
+        return r.Type switch
+        {
+            ReminderType.DailyAtTime when r.DailyTimeMinutes is int dm
+                => $"Каждый день в {dm / 60:D2}:{dm % 60:D2}",
+            ReminderType.EveryNMinutesInWindow when r.WindowStartMinutes is int ws && r.WindowEndMinutes is int we && r.EveryMinutes is int ev
+                => $"{ws / 60:D2}:{ws % 60:D2}–{we / 60:D2}:{we % 60:D2} каждые {ev} мин",
+            _ => "Расписание неизвестно"
+        };
+    }
+
+    private static string Truncate(string text, int max)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return "—";
+        return text.Length <= max ? text : text[..(max - 1)] + "…";
     }
 
     private async Task UpsertUserProfileAsync(long telegramUserId, long chatId, CancellationToken ct)
