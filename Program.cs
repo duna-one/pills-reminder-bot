@@ -8,6 +8,7 @@ using Telegram.Bot;
 using Microsoft.EntityFrameworkCore;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
+using Npgsql;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -22,12 +23,15 @@ var botToken = Environment.GetEnvironmentVariable("BOT_TOKEN");
 if (string.IsNullOrWhiteSpace(botToken))
     throw new InvalidOperationException("Environment variable BOT_TOKEN is required.");
 
-var sqliteCs =
-    builder.Configuration["ConnectionStrings:Sqlite"]
-    ?? Environment.GetEnvironmentVariable("SQLITE_CONNECTION_STRING")
-    ?? "Data Source=pills.db";
+var pgCs =
+    builder.Configuration["ConnectionStrings:Postgres"]
+    ?? Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING")
+    ?? "Host=localhost;Port=5432;Database=pills;Username=pills;Password=pills;Pooling=true;Maximum Pool Size=20";
 
-builder.Services.AddDbContextFactory<AppDbContext>(o => o.UseSqlite(sqliteCs));
+// Validate connection string early to fail fast on invalid format
+var _ = new NpgsqlConnectionStringBuilder(pgCs);
+
+builder.Services.AddDbContextFactory<AppDbContext>(o => o.UseNpgsql(pgCs));
 
 builder.Services.AddSingleton<ITelegramBotClient>(_ => new TelegramBotClient(botToken));
 builder.Services.AddSingleton<BotUpdateHandler>();

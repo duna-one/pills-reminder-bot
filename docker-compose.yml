@@ -1,4 +1,20 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pills-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "pills"
+      POSTGRES_USER: "pills"
+      POSTGRES_PASSWORD: "pills"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pills -d pills"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
   pillsreminderbot:
     image: dunaaaaaa/pills-reminder-bot:latest
     pull_policy: always
@@ -8,8 +24,8 @@ services:
       # required
       BOT_TOKEN: "${BOT_TOKEN}"
 
-      # DB (persist to a volume)
-      SQLITE_CONNECTION_STRING: "Data Source=/app/data/pills.db"
+      # DB (persisted in postgres volume)
+      POSTGRES_CONNECTION_STRING: "Host=postgres;Port=5432;Database=pills;Username=pills;Password=pills;Pooling=true;Maximum Pool Size=20"
 
       # optional tuning (defaults: 2h poll, 120m repeat)
       SCHEDULER_POLL_SECONDS: "7200"
@@ -17,6 +33,12 @@ services:
 
       # Dockerfile uses USER $APP_UID; default in Dockerfile is 0 (root).
       APP_UID: "0"
-    volumes:
-      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+
+volumes:
+  pgdata:
 
