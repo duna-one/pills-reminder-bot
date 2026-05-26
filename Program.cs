@@ -24,8 +24,8 @@ if (string.IsNullOrWhiteSpace(botToken))
     throw new InvalidOperationException("Environment variable BOT_TOKEN is required.");
 
 var pgCs =
-    builder.Configuration["ConnectionStrings:Postgres"]
-    ?? Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING")
+    Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING")
+    ?? builder.Configuration["ConnectionStrings:Postgres"]
     ?? "Host=localhost;Port=5432;Database=pills;Username=pills;Password=pills;Pooling=true;Maximum Pool Size=20";
 
 // Validate connection string early to fail fast on invalid format
@@ -34,19 +34,23 @@ _ = new NpgsqlConnectionStringBuilder(pgCs);
 builder.Services.AddDbContextFactory<AppDbContext>(o => o.UseNpgsql(pgCs));
 
 builder.Services.AddSingleton<ITelegramBotClient>(_ => new TelegramBotClient(botToken));
+builder.Services.AddSingleton<ReminderScheduleCalculator>();
+builder.Services.AddSingleton<StickerService>();
 builder.Services.AddSingleton<BotUpdateHandler>();
 builder.Services.AddHostedService<TelegramPollingService>();
 builder.Services.AddHostedService<ReminderSchedulerService>();
 
 using var host = builder.Build();
 
-// Ensure DB exists (MVP: without migrations)
+var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
+
+// Apply pending EF migrations on startup.
 await using (var db = host.Services.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContext())
 {
-    await db.Database.EnsureCreatedAsync();
+    await MigrationBootstrapper.BaselineExistingEnsureCreatedSchemaAsync(db, logger);
+    await db.Database.MigrateAsync();
 }
 
-var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
 var botClient = host.Services.GetRequiredService<ITelegramBotClient>();
 var me = await botClient.GetMe();
 logger.LogInformation("Bot started as @{Username} (id={Id})", me.Username, me.Id);
