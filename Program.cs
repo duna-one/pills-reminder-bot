@@ -42,13 +42,15 @@ builder.Services.AddHostedService<ReminderSchedulerService>();
 
 using var host = builder.Build();
 
+var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
+
 // Apply pending EF migrations on startup.
 await using (var db = host.Services.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContext())
 {
+    await MigrationBootstrapper.BaselineExistingEnsureCreatedSchemaAsync(db, logger);
     await db.Database.MigrateAsync();
 }
 
-var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
 var botClient = host.Services.GetRequiredService<ITelegramBotClient>();
 var me = await botClient.GetMe();
 logger.LogInformation("Bot started as @{Username} (id={Id})", me.Username, me.Id);
