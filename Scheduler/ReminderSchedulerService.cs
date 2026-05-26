@@ -5,34 +5,28 @@ using PillsReminderBot.Bot;
 using PillsReminderBot.Domain;
 using PillsReminderBot.Persistence;
 using Telegram.Bot;
-using Telegram.Bot.Types;
-using Telegram.Bot.Types.Enums;
-using System.Collections.Concurrent;
 
 namespace PillsReminderBot.Scheduler;
 
 public sealed class ReminderSchedulerService : BackgroundService
 {
-    private static readonly TimeSpan DefaultPollInterval = TimeSpan.FromHours(2);
+    private static readonly TimeSpan DefaultPollInterval = TimeSpan.FromSeconds(60);
 
     private readonly ILogger<ReminderSchedulerService> _logger;
     private readonly ITelegramBotClient _bot;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
-    private readonly string[] _stickerSets;
-    private readonly ConcurrentDictionary<string, string[]> _stickerCache = new();
+    private readonly StickerService _stickerService;
 
     public ReminderSchedulerService(
         ILogger<ReminderSchedulerService> logger,
         ITelegramBotClient bot,
-        IDbContextFactory<AppDbContext> dbFactory)
+        IDbContextFactory<AppDbContext> dbFactory,
+        StickerService stickerService)
     {
         _logger = logger;
         _bot = bot;
         _dbFactory = dbFactory;
-        var envSets = Environment.GetEnvironmentVariable("STICKER_SETS") ?? string.Empty;
-        _stickerSets = envSets
-            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-            .ToArray();
+        _stickerService = stickerService;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -93,12 +87,11 @@ public sealed class ReminderSchedulerService : BackgroundService
 
         // We need user chat ids to deliver messages.
         var userIds = due.Select(r => r.TelegramUserId).Distinct().ToArray();
-        var chats = (await db.UserProfiles
-                .AsNoTracking()
-                .Select(p => new { p.TelegramUserId, p.ChatId })
-                .ToListAsync(ct))
-            .Where(x => userIds.Contains(x.TelegramUserId))
-            .ToDictionary(x => x.TelegramUserId, x => x.ChatId);
+        var chats = await db.UserProfiles
+            .AsNoTracking()
+            .Where(p => userIds.Contains(p.TelegramUserId))
+            .Select(p => new { p.TelegramUserId, p.ChatId })
+            .ToDictionaryAsync(x => x.TelegramUserId, x => x.ChatId, ct);
 
         foreach (var r in due)
         {
@@ -126,7 +119,7 @@ public sealed class ReminderSchedulerService : BackgroundService
                     replyMarkup: BotUpdateHandler.BuildAckKeyboard(r.Id, r.ActiveCycleId),
                     cancellationToken: ct);
 
-                await SendRandomStickerAsync(chatId, ct);
+                await _stickerService.SendRandomStickerAsync(chatId, ct);
             }
             catch (Exception ex)
             {
@@ -141,52 +134,6 @@ public sealed class ReminderSchedulerService : BackgroundService
         }
 
         await db.SaveChangesAsync(ct);
-    }
-
-    private async Task<string?> PickRandomStickerAsync(CancellationToken ct)
-    {
-        if (_stickerSets.Length == 0)
-            return null;
-
-        var setName = _stickerSets[Random.Shared.Next(_stickerSets.Length)];
-        if (!_stickerCache.TryGetValue(setName, out var stickers))
-        {
-            try
-            {
-                var set = await _bot.GetStickerSet(setName, cancellationToken: ct);
-                stickers = set.Stickers
-                    .Where(s => s.Type == StickerType.Regular)
-                    .Select(s => s.FileId)
-                    .ToArray();
-                _stickerCache[setName] = stickers;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to load sticker set {Set}", setName);
-                return null;
-            }
-        }
-
-        if (stickers.Length == 0)
-            return null;
-
-        return stickers[Random.Shared.Next(stickers.Length)];
-    }
-
-    private async Task SendRandomStickerAsync(long chatId, CancellationToken ct)
-    {
-        var fileId = await PickRandomStickerAsync(ct);
-        if (fileId is null)
-            return;
-
-        try
-        {
-            await _bot.SendSticker(chatId, InputFile.FromFileId(fileId), cancellationToken: ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to send sticker to chatId={ChatId}", chatId);
-        }
     }
 }
 
