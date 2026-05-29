@@ -63,7 +63,7 @@ public sealed class BotUpdateHandler
 
         if (userId is not null && Flows.TryGetValue(userId.Value, out var flow) && flow.Stage != ReminderFlowStage.None)
         {
-            await HandleFlowMessageAsync(userId.Value, chatId, text, flow, ct);
+            await HandleFlowMessageAsync(userId.Value, chatId, message.MessageId, text, flow, ct);
             return;
         }
 
@@ -768,8 +768,10 @@ public sealed class BotUpdateHandler
             ct);
     }
 
-    private async Task HandleFlowMessageAsync(long userId, long chatId, string text, ReminderFlowState flow, CancellationToken ct)
+    private async Task HandleFlowMessageAsync(long userId, long chatId, int userMessageId, string text, ReminderFlowState flow, CancellationToken ct)
     {
+        await TryDeleteMessageAsync(chatId, userMessageId, ct);
+
         switch (flow.Stage)
         {
             case ReminderFlowStage.AwaitingDailyTime:
@@ -820,6 +822,22 @@ public sealed class BotUpdateHandler
 
         Flows.TryRemove(userId, out _);
         await ShowHomeAsync(userId, chatId, flow.PromptMessageId, "Диалог сброшен.", ct);
+    }
+
+    private async Task TryDeleteMessageAsync(long chatId, int messageId, CancellationToken ct)
+    {
+        try
+        {
+            await _bot.DeleteMessage(chatId, messageId, cancellationToken: ct);
+        }
+        catch (ApiRequestException ex)
+        {
+            _logger.LogDebug(ex, "Failed to delete user input messageId={MessageId}", messageId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Unexpected failure deleting user input messageId={MessageId}", messageId);
+        }
     }
 
     private async Task ShowWeekDaysStepAsync(long chatId, int? messageId, ReminderFlowState flow, CancellationToken ct)
