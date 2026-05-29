@@ -70,6 +70,38 @@ public sealed class ReminderScheduleCalculatorTests
     }
 
     [Fact]
+    public void CalculateNextRepeatAtUtc_CandidateOnSelectedDay_ReturnsRepeatCandidate()
+    {
+        var reminder = new Reminder
+        {
+            Type = ReminderType.DailyAtTime,
+            DailyTimeMinutes = 9 * 60,
+            WeekDaysMask = WeekDayMask.Weekdays
+        };
+        var nowUtc = new DateTimeOffset(2026, 5, 29, 12, 0, 0, TimeSpan.Zero);
+
+        var result = _calculator.CalculateNextRepeatAtUtc(reminder, "UTC+03:00", nowUtc, TimeSpan.FromHours(2));
+
+        Assert.Equal(new DateTimeOffset(2026, 5, 29, 14, 0, 0, TimeSpan.Zero), result);
+    }
+
+    [Fact]
+    public void CalculateNextRepeatAtUtc_CandidateOnUnselectedDay_ReturnsNextScheduledSelectedDay()
+    {
+        var reminder = new Reminder
+        {
+            Type = ReminderType.DailyAtTime,
+            DailyTimeMinutes = 9 * 60,
+            WeekDaysMask = WeekDayMask.Weekdays
+        };
+        var nowUtc = new DateTimeOffset(2026, 5, 29, 21, 30, 0, TimeSpan.Zero);
+
+        var result = _calculator.CalculateNextRepeatAtUtc(reminder, "UTC+03:00", nowUtc, TimeSpan.FromHours(2));
+
+        Assert.Equal(new DateTimeOffset(2026, 6, 1, 6, 0, 0, TimeSpan.Zero), result);
+    }
+
+    [Fact]
     public void CalculateNextFireAtUtc_WindowBeforeStart_ReturnsWindowStartToday()
     {
         var reminder = WindowReminder();

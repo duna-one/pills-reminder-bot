@@ -53,6 +53,12 @@ public static class WeekDayMask
         };
     }
 
+    public static string FormatSelection(int mask)
+    {
+        mask &= AllDays;
+        return mask == 0 ? "не выбрано" : Format(mask);
+    }
+
     private static int BitFor(DayOfWeek day)
         => day switch
         {

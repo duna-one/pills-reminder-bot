@@ -22,6 +22,22 @@ public sealed class ReminderScheduleCalculator
         };
     }
 
+    public DateTimeOffset CalculateNextRepeatAtUtc(
+        Reminder reminder,
+        string? timeZoneId,
+        DateTimeOffset nowUtc,
+        TimeSpan repeatInterval)
+    {
+        var offset = ParseUtcOffsetOrZero(timeZoneId);
+        var repeatCandidateUtc = nowUtc.Add(repeatInterval);
+        var repeatCandidateLocal = repeatCandidateUtc.ToOffset(offset);
+
+        if (WeekDayMask.Contains(reminder.WeekDaysMask, repeatCandidateLocal.DayOfWeek))
+            return repeatCandidateUtc;
+
+        return CalculateNextFireAtUtc(reminder, timeZoneId, repeatCandidateUtc);
+    }
+
     public static TimeSpan ParseUtcOffsetOrZero(string? timeZoneId)
     {
         if (string.IsNullOrWhiteSpace(timeZoneId))

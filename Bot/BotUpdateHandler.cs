@@ -840,7 +840,7 @@ public sealed class BotUpdateHandler
             lines.Add($"Время: {dailyMinutes / 60:D2}:{dailyMinutes % 60:D2}");
 
         if (flow.Stage is ReminderFlowStage.AwaitingWeekDays or ReminderFlowStage.AwaitingTitle)
-            lines.Add($"Дни: {WeekDayMask.Format(flow.WeekDaysMask)}");
+            lines.Add($"Дни: {WeekDayMask.FormatSelection(flow.WeekDaysMask)}");
 
         lines.Add(string.Empty);
         lines.Add(prompt);

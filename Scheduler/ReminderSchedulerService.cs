@@ -15,15 +15,18 @@ public sealed class ReminderSchedulerService : BackgroundService
     private readonly ILogger<ReminderSchedulerService> _logger;
     private readonly ITelegramBotClient _bot;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
+    private readonly ReminderScheduleCalculator _scheduleCalculator;
 
     public ReminderSchedulerService(
         ILogger<ReminderSchedulerService> logger,
         ITelegramBotClient bot,
-        IDbContextFactory<AppDbContext> dbFactory)
+        IDbContextFactory<AppDbContext> dbFactory,
+        ReminderScheduleCalculator scheduleCalculator)
     {
         _logger = logger;
         _bot = bot;
         _dbFactory = dbFactory;
+        _scheduleCalculator = scheduleCalculator;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -87,12 +90,12 @@ public sealed class ReminderSchedulerService : BackgroundService
         var chats = await db.UserProfiles
             .AsNoTracking()
             .Where(p => userIds.Contains(p.TelegramUserId))
-            .Select(p => new { p.TelegramUserId, p.ChatId })
-            .ToDictionaryAsync(x => x.TelegramUserId, x => x.ChatId, ct);
+            .Select(p => new { p.TelegramUserId, p.ChatId, p.TimeZoneId })
+            .ToDictionaryAsync(x => x.TelegramUserId, ct);
 
         foreach (var r in due)
         {
-            if (!chats.TryGetValue(r.TelegramUserId, out var chatId) || chatId == 0)
+            if (!chats.TryGetValue(r.TelegramUserId, out var profile) || profile.ChatId == 0)
             {
                 _logger.LogWarning("No chatId for TelegramUserId={UserId}, skipping reminderId={ReminderId}", r.TelegramUserId, r.Id);
                 // Push it forward to avoid tight loop.
@@ -111,20 +114,20 @@ public sealed class ReminderSchedulerService : BackgroundService
             try
             {
                 await _bot.SendMessage(
-                    chatId: chatId,
+                    chatId: profile.ChatId,
                     text: string.IsNullOrWhiteSpace(r.Message) ? r.Title : r.Message,
                     replyMarkup: BotUpdateHandler.BuildAckKeyboard(r.Id, r.ActiveCycleId),
                     cancellationToken: ct);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to send reminderId={ReminderId} to chatId={ChatId}", r.Id, chatId);
+                _logger.LogError(ex, "Failed to send reminderId={ReminderId} to chatId={ChatId}", r.Id, profile.ChatId);
                 // Don't advance aggressively on send failure; try again next tick.
                 continue;
             }
 
             r.LastFiredAtUtc = now;
-            r.NextFireAtUtc = now.Add(repeatInterval);
+            r.NextFireAtUtc = _scheduleCalculator.CalculateNextRepeatAtUtc(r, profile.TimeZoneId, now, repeatInterval);
             r.UpdatedAtUtc = now;
         }
 

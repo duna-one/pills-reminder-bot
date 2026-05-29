@@ -25,6 +25,12 @@ public sealed class WeekDayMaskTests
     }
 
     [Fact]
+    public void FormatSelection_NoDays_ReturnsNotSelected()
+    {
+        Assert.Equal("не выбрано", WeekDayMask.FormatSelection(0));
+    }
+
+    [Fact]
     public void Toggle_ExistingDay_RemovesDay()
     {
         var result = WeekDayMask.Toggle(WeekDayMask.AllDays, WeekDayMask.Wednesday);
