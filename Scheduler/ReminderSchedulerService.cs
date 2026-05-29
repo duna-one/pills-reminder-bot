@@ -15,18 +15,15 @@ public sealed class ReminderSchedulerService : BackgroundService
     private readonly ILogger<ReminderSchedulerService> _logger;
     private readonly ITelegramBotClient _bot;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
-    private readonly StickerService _stickerService;
 
     public ReminderSchedulerService(
         ILogger<ReminderSchedulerService> logger,
         ITelegramBotClient bot,
-        IDbContextFactory<AppDbContext> dbFactory,
-        StickerService stickerService)
+        IDbContextFactory<AppDbContext> dbFactory)
     {
         _logger = logger;
         _bot = bot;
         _dbFactory = dbFactory;
-        _stickerService = stickerService;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -118,8 +115,6 @@ public sealed class ReminderSchedulerService : BackgroundService
                     text: string.IsNullOrWhiteSpace(r.Message) ? r.Title : r.Message,
                     replyMarkup: BotUpdateHandler.BuildAckKeyboard(r.Id, r.ActiveCycleId),
                     cancellationToken: ct);
-
-                await _stickerService.SendRandomStickerAsync(chatId, ct);
             }
             catch (Exception ex)
             {

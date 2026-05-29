@@ -29,6 +29,7 @@ public sealed class AppDbContext : DbContext
 
             e.Property(x => x.Title).HasMaxLength(200);
             e.Property(x => x.ActiveCycleId).HasMaxLength(64);
+            e.Property(x => x.WeekDaysMask).HasDefaultValue(WeekDayMask.AllDays);
         });
     }
 }

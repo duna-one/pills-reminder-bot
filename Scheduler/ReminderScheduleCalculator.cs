@@ -12,12 +12,12 @@ public sealed class ReminderScheduleCalculator
         return reminder.Type switch
         {
             ReminderType.DailyAtTime when reminder.DailyTimeMinutes is int dailyMinutes
-                => CalculateNextDailyLocal(nowLocal, offset, dailyMinutes).ToUniversalTime(),
+                => CalculateNextDailyLocal(nowLocal, offset, dailyMinutes, reminder.WeekDaysMask).ToUniversalTime(),
             ReminderType.EveryNMinutesInWindow
                 when reminder.WindowStartMinutes is int windowStart
                      && reminder.WindowEndMinutes is int windowEnd
                      && reminder.EveryMinutes is int everyMinutes
-                => CalculateNextInWindowLocal(nowLocal, offset, windowStart, windowEnd, everyMinutes).ToUniversalTime(),
+                => CalculateNextInWindowLocal(nowLocal, offset, windowStart, windowEnd, everyMinutes, reminder.WeekDaysMask).ToUniversalTime(),
             _ => nowUtc.AddDays(1)
         };
     }
@@ -50,18 +50,25 @@ public sealed class ReminderScheduleCalculator
         return sign == '-' ? -offset : offset;
     }
 
-    private static DateTimeOffset CalculateNextDailyLocal(DateTimeOffset nowLocal, TimeSpan offset, int dailyMinutes)
+    private static DateTimeOffset CalculateNextDailyLocal(DateTimeOffset nowLocal, TimeSpan offset, int dailyMinutes, int weekDaysMask)
     {
-        var targetTodayLocal = new DateTimeOffset(
-            year: nowLocal.Year,
-            month: nowLocal.Month,
-            day: nowLocal.Day,
-            hour: dailyMinutes / 60,
-            minute: dailyMinutes % 60,
-            second: 0,
-            offset: offset);
+        for (var dayOffset = 0; dayOffset <= 7; dayOffset++)
+        {
+            var day = nowLocal.Date.AddDays(dayOffset);
+            var candidate = new DateTimeOffset(
+                year: day.Year,
+                month: day.Month,
+                day: day.Day,
+                hour: dailyMinutes / 60,
+                minute: dailyMinutes % 60,
+                second: 0,
+                offset: offset);
 
-        return targetTodayLocal > nowLocal ? targetTodayLocal : targetTodayLocal.AddDays(1);
+            if (WeekDayMask.Contains(weekDaysMask, candidate.DayOfWeek) && candidate > nowLocal)
+                return candidate;
+        }
+
+        return new DateTimeOffset(nowLocal.Date.AddDays(1), offset).AddMinutes(dailyMinutes);
     }
 
     private static DateTimeOffset CalculateNextInWindowLocal(
@@ -69,24 +76,35 @@ public sealed class ReminderScheduleCalculator
         TimeSpan offset,
         int windowStart,
         int windowEnd,
-        int everyMinutes)
+        int everyMinutes,
+        int weekDaysMask)
     {
-        var dayStart = new DateTimeOffset(nowLocal.Year, nowLocal.Month, nowLocal.Day, 0, 0, 0, offset);
-        var windowStartLocal = dayStart.AddMinutes(windowStart);
-        var windowEndLocal = dayStart.AddMinutes(windowEnd);
+        for (var dayOffset = 0; dayOffset <= 7; dayOffset++)
+        {
+            var day = nowLocal.Date.AddDays(dayOffset);
+            var dayStart = new DateTimeOffset(day, offset);
+            if (!WeekDayMask.Contains(weekDaysMask, dayStart.DayOfWeek))
+                continue;
 
-        if (nowLocal < windowStartLocal)
-            return windowStartLocal;
+            var windowStartLocal = dayStart.AddMinutes(windowStart);
+            var windowEndLocal = dayStart.AddMinutes(windowEnd);
 
-        if (nowLocal >= windowEndLocal)
-            return windowStartLocal.AddDays(1);
+            if (nowLocal < windowStartLocal)
+                return windowStartLocal;
 
-        var minutesSinceStart = (nowLocal - windowStartLocal).TotalMinutes;
-        var intervalIndex = (int)Math.Floor(minutesSinceStart / everyMinutes);
-        var candidate = windowStartLocal.AddMinutes(intervalIndex * everyMinutes);
-        if (candidate <= nowLocal)
-            candidate = candidate.AddMinutes(everyMinutes);
+            if (nowLocal >= windowEndLocal)
+                continue;
 
-        return candidate < windowEndLocal ? candidate : windowStartLocal.AddDays(1);
+            var minutesSinceStart = (nowLocal - windowStartLocal).TotalMinutes;
+            var intervalIndex = (int)Math.Floor(minutesSinceStart / everyMinutes);
+            var candidate = windowStartLocal.AddMinutes(intervalIndex * everyMinutes);
+            if (candidate <= nowLocal)
+                candidate = candidate.AddMinutes(everyMinutes);
+
+            if (candidate < windowEndLocal)
+                return candidate;
+        }
+
+        return new DateTimeOffset(nowLocal.Date.AddDays(1), offset).AddMinutes(windowStart);
     }
 }

@@ -31,6 +31,8 @@ public sealed class Reminder
     /// </summary>
     public int? EveryMinutes { get; set; }
 
+    public int WeekDaysMask { get; set; } = WeekDayMask.AllDays;
+
     public bool IsEnabled { get; set; } = true;
 
     /// <summary>
