@@ -24,17 +24,20 @@ public sealed class BotUpdateHandler
     private readonly ITelegramBotClient _bot;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly ReminderScheduleCalculator _scheduleCalculator;
+    private readonly StickerService _stickerService;
 
     public BotUpdateHandler(
         ILogger<BotUpdateHandler> logger,
         ITelegramBotClient bot,
         IDbContextFactory<AppDbContext> dbFactory,
-        ReminderScheduleCalculator scheduleCalculator)
+        ReminderScheduleCalculator scheduleCalculator,
+        StickerService stickerService)
     {
         _logger = logger;
         _bot = bot;
         _dbFactory = dbFactory;
         _scheduleCalculator = scheduleCalculator;
+        _stickerService = stickerService;
     }
 
     public async Task HandleUpdateAsync(Update update, CancellationToken ct)
@@ -74,6 +77,7 @@ public sealed class BotUpdateHandler
 
             await UpsertUserProfileAsync(userId!.Value, chatId, ct);
             await ShowHomeAsync(userId.Value, chatId, null, "Привет! Я помогу не забывать про лекарства.", ct);
+            await _stickerService.SendRandomStickerAsync(chatId, ct);
             return;
         }
 
