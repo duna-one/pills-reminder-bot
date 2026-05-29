@@ -345,7 +345,7 @@ public sealed class BotUpdateHandler
         {
             await _bot.SendMessage(
                 chatId: cq.Message.Chat.Id,
-                text: $"Удалено напоминание #{reminder.Id}.",
+                text: $"Напоминание удалено!",
                 replyMarkup: BuildMainMenuKeyboard(),
                 cancellationToken: ct);
         }
